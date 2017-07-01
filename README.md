@@ -12,6 +12,7 @@ Code and example data for Volume Raycasting copied from: https://github.com/tool
 
 - Python >=3.5
 - PyQt5 (>=5.6)
+- PyOpenGL
 - numpy
 - ModernGL wrapper [docs](https://moderngl.readthedocs.io/)
 - Pyrr Math library [docs](http://pyrr.readthedocs.io/en/latest/info_contributing.html)
