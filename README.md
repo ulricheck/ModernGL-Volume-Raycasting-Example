@@ -37,6 +37,6 @@ This will open an opengl window
 
 ## Further Reading
 
-[A simple and flexible volume rendering framework for graphics-hardware-based raycasting](http://dl.acm.org/citation.cfm?id=2386498
-[Acceleration Techniques for GPU-based Volume Rendering](http://dl.acm.org/citation.cfm?id=1081432.1081482})
-[Real-time Volume Rendering for High Quality Visualization in Augmented Reality](http://far.in.tum.de/pub/kutter2008amiarcs/)
+- [A simple and flexible volume rendering framework for graphics-hardware-based raycasting](http://dl.acm.org/citation.cfm?id=2386498)
+- [Acceleration Techniques for GPU-based Volume Rendering](http://dl.acm.org/citation.cfm?id=1081432.1081482})
+- [Real-time Volume Rendering for High Quality Visualization in Augmented Reality](http://far.in.tum.de/pub/kutter2008amiarcs/)
