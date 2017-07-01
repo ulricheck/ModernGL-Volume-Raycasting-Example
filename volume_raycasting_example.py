@@ -7,9 +7,9 @@ import os
 import struct
 
 import numpy as np
+# @Todo XXX dependency to pyrr should be removed
 from pyrr import Matrix44
 
-from PIL import Image
 from PyQt5 import QtCore, QtGui, QtOpenGL, QtWidgets
 from OpenGL.GL import glEnable, glDisable, glCullFace, GL_CULL_FACE, GL_FRONT, GL_BACK
 from OpenGL.GL import glBindFramebuffer, GL_FRAMEBUFFER
@@ -80,7 +80,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.fbo = None
 
 
-        self.camera_center = QtGui.QVector3D(0.5, 0.5, 0.5)  ## will always appear at the center of the widget
+        self.camera_center = QtGui.QVector3D(0.5, 0.5, 0.5)  ## will always appear at the center of the volume
         self.camera_distance = 3.0          ## distance of camera from center
         self.camera_fov =  60               ## horizontal field of view in degrees
         self.camera_elevation =  30         ## camera's angle of elevation in degrees
@@ -102,6 +102,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.volume_texture = self.ctx.texture3d(self.volume_size, 1, self.volume_data.tobytes())
         self.volume_texture.repeat_x = True
         self.volume_texture.repeat_y = True
+        # @Todo: ModernGL this raises an error - probably missing wrapper
         #self.volume_texture.repeat_z = True
         self.volume_texture.filter = ModernGL.LINEAR
 
@@ -298,13 +299,14 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         prog.uniforms['Mvp'].write(mvp.astype('float32').tobytes())
 
     def draw_box_eep(self):
-        # decide with face to render (@Todo: ModernGL needs a way to handle this)
+        # decide which face to render (@Todo: ModernGL needs a way to handle this)
         glEnable(GL_CULL_FACE);
         glCullFace(GL_FRONT);
         self.vao_eep.render()
         glDisable(GL_CULL_FACE);
 
     def draw_box_rc(self):
+        # decide which face to render (@Todo: ModernGL needs a way to handle this)
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         self.vao_rc.render()
@@ -333,8 +335,12 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.setup_camera(self.prog_eep, pos=pos)
         self.draw_box_eep()
 
-        # stop using the fbo (@Todo: ModernGL needs a way to handle this)
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if hasattr(ModernGL, "default_framebuffer"):
+            ModernGL.default_framebuffer.use()
+        else:
+            # stop using the fbo (@Todo: ModernGL needs a way to handle this)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
         self.color_texture.use(2)
 
         # Raycast Volume
@@ -358,6 +364,8 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.depth_texture = None
 
 
+
+    # @Todo: XXX This method is not used at the moment .. need to check first if it's correct.
     def projectionMatrix(self):
         x0, y0, w, h = (0, 0, self.width()*self.devicePixelRatio(), self.height()*self.devicePixelRatio())
         dist = self.camera_distance
