@@ -23,7 +23,7 @@ Code and example data for Volume Raycasting copied from: https://github.com/tool
 ```
 git checkout https://github.com/ulricheck/ModernGL-Volume-Raycasting-Example.git
 cd ModernGL-Volume-Raycasting-Example
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ## Running the demo
