@@ -38,7 +38,7 @@ void main()
     // backgroundColor
     vec4 bgColor = vec4(1.0, 1.0, 1.0, 1.0);
     
-    int numSteps = int(ceil(len / StepSize));
+    int numSteps = int(ceil(len / deltaDirLen));
     for(int i = 0; i < numSteps; i++)
     {
         // scaler value
@@ -67,8 +67,15 @@ void main()
         }
     }
     FragColor = colorAcum;
+    
+    // Visualize the number of raycasting steps
+    //FragColor = vec4(clamp(float(numSteps)/1500, 0, 1));
+
     // for test
     //FragColor = vec4(EntryPoint, 1.0);
     //FragColor = vec4(exitPoint, 1.0);
     
+    // Visualize the transfer function
+    //FragColor = texture(TransferFunc, vec2(gl_FragCoord.s/ScreenSize.x, 0.));
+    //FragColor *= FragColor.a;
 }

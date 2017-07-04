@@ -5,6 +5,7 @@
 
 import os
 import struct
+import time
 
 import numpy as np
 # @Todo XXX dependency to pyrr should be removed
@@ -47,10 +48,10 @@ def load_raw(filename, volsize):
     
     return data
 
-
-
-
-
+def load_shader(filename):
+    with open(os.path.join("glsl", filename), "r") as file:
+        shadercode = file.read();
+    return shadercode
 
 class QGLControllerWidget(QtOpenGL.QGLWidget):
     def __init__(self, volume_data, volsize, transferfunction, parent=None):
@@ -79,7 +80,8 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.vao_rc = None
         self.fbo = None
 
-        self.SamplingRate = 0.5
+        # Samplig rate controls the distance of the raycasting samples
+        self.sampling_rate = 0.5
 
         self.camera_center = QtGui.QVector3D(0.5, 0.5, 0.5)  ## will always appear at the center of the volume
         self.camera_distance = 3.0          ## distance of camera from center
@@ -180,13 +182,13 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
     def reload_shaders(self):
         print("Reloading shaders..")
         self.prog_eep = self.ctx.program([
-            self.ctx.vertex_shader(open(os.path.join("glsl", "exitpoints.vert"), "r").read()),
-            self.ctx.fragment_shader(open(os.path.join("glsl", "exitpoints.frag"), "r").read()),
+            self.ctx.vertex_shader(load_shader("exitpoints.vert")),
+            self.ctx.fragment_shader(load_shader("exitpoints.frag")),
         ])
 
         self.prog_rc = self.ctx.program([
-            self.ctx.vertex_shader(open(os.path.join("glsl", "raycasting.vert"), "r").read()),
-            self.ctx.fragment_shader(open(os.path.join("glsl", "raycasting.frag"), "r").read()),
+            self.ctx.vertex_shader(load_shader("raycasting.vert")),
+            self.ctx.fragment_shader(load_shader("raycasting.frag")),
         ])
         
         # create vertex array objects (@Todo: ModernGL associates vao with a program -> not possible to use vao with multiple programs)
@@ -204,6 +206,8 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.unf_volumetex = self.prog_rc.uniforms["VolumeTex"]
 
     def paintGL(self):
+        render_start = time.perf_counter()
+
         w, h = self.width()*self.devicePixelRatio(), self.height()*self.devicePixelRatio()
         self.ctx.enable(ModernGL.DEPTH_TEST)
         self.ctx.viewport = (0, 0, w, h)
@@ -237,7 +241,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         # Raycast Volume
         self.ctx.clear(0.9, 0.9, 0.9)
         self.unf_screensize.value = (w,h)
-        self.unf_stepsize.value = self.SamplingRate / max(self.volume_size)
+        self.unf_stepsize.value = self.sampling_rate / max(self.volume_size)
         self.unf_volumetex.value = 0
         self.unf_transferfunc.value = 1
         self.unf_exitpoints.value = 2
@@ -248,6 +252,18 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.ctx.finish()
         self.update()
 
+        dt = time.perf_counter() - render_start
+        if hasattr(self, "last_frame_counter"):
+            self.last_frame_counter += 1
+            self.last_frame_time_acc += dt
+            if self.last_frame_counter == 10:
+                avg_frame_time = self.last_frame_time_acc / 10
+                print("%.3f ms, %.1f FPS" % (avg_frame_time*1000, 1./(avg_frame_time)))
+                self.last_frame_time_acc = 0
+                self.last_frame_counter = 1
+        else:
+            self.last_frame_time_acc = dt
+            self.last_frame_counter = 1
 
     def resizeGL(self, width, height):
         self.color_texture = None
