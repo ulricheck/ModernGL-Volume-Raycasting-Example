@@ -79,6 +79,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.vao_rc = None
         self.fbo = None
 
+        self.SamplingRate = 0.5
 
         self.camera_center = QtGui.QVector3D(0.5, 0.5, 0.5)  ## will always appear at the center of the volume
         self.camera_distance = 3.0          ## distance of camera from center
@@ -122,135 +123,9 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.volume_texture.use(0)
         self.tff_texture.use(1)
 
-
-        self.prog_eep = self.ctx.program([
-            self.ctx.vertex_shader('''
-                #version 410
-
-                layout(location = 0) in vec3 VerPos;
-
-                out vec3 Color;
-
-                uniform mat4 Mvp;
-
-                void main()
-                {
-                    Color = VerPos;
-                    gl_Position = Mvp * vec4(VerPos, 1.0);
-                }
-            '''),
-            self.ctx.fragment_shader('''
-                #version 410
-
-                in vec3 Color;
-                layout (location = 0) out vec4 FragColor;
-
-
-                void main()
-                {
-                    FragColor = vec4(Color, 1.0);
-                }
-           '''),
-        ])
-
-
-        self.prog_rc = self.ctx.program([
-            self.ctx.vertex_shader('''
-                #version 410
-
-                layout (location = 0) in vec3 VerPos;
-
-
-                out vec3 EntryPoint;
-                out vec4 ExitPointCoord;
-
-                uniform mat4 Mvp;
-
-                void main()
-                {
-                    EntryPoint = VerPos;
-                    gl_Position = Mvp * vec4(VerPos,1.0);
-                    ExitPointCoord = gl_Position;  
-                }
-            '''),
-            self.ctx.fragment_shader('''
-                #version 410
-
-                in vec3 EntryPoint;
-                in vec4 ExitPointCoord;
-
-                uniform sampler2D ExitPoints;
-                uniform sampler3D VolumeTex;
-                uniform sampler2D TransferFunc;  
-                uniform float     StepSize;
-                uniform vec2      ScreenSize;
-                layout (location = 0) out vec4 FragColor;
-
-                void main()
-                {
-                    // ExitPointCoord 
-                    vec3 exitPoint = texture(ExitPoints, gl_FragCoord.st/ScreenSize).xyz;
-                    // that will actually give you clip-space coordinates rather than
-                    // normalised device coordinates, since you're not performing the perspective
-                    // division which happens during the rasterisation process (between the vertex
-                    // shader and fragment shader
-                    // vec2 exitFragCoord = (ExitPointCoord.xy / ExitPointCoord.w + 1.0)/2.0;
-                    // vec3 exitPoint  = texture(ExitPoints, exitFragCoord).xyz;
-                    if (EntryPoint == exitPoint)
-                        //background need no raycasting
-                        discard;
-                    vec3 dir = exitPoint - EntryPoint;
-                    float len = length(dir); // the length from front to back is calculated and used to terminate the ray
-                    vec3 deltaDir = normalize(dir) * StepSize;
-                    float deltaDirLen = length(deltaDir);
-                    vec3 voxelCoord = EntryPoint;
-                    vec4 colorAcum = vec4(0.0); // The dest color
-                    float alphaAcum = 0.0;                // The  dest alpha for blending
-                    /*  */
-                    float intensity;
-                    float lengthAcum = 0.0;
-                    vec4 colorSample; // The src color 
-                    float alphaSample; // The src alpha
-                    // backgroundColor
-                    vec4 bgColor = vec4(1.0, 1.0, 1.0, 0.0);
-                 
-                    for(int i = 0; i < 1600; i++)
-                    {
-                        // scaler value
-                        intensity =  texture(VolumeTex, voxelCoord).x;
-                        // 
-                        colorSample = texture(TransferFunc, vec2(intensity, 0.));
-                        // modulate the value of colorSample.a
-                        // front-to-back integration
-                        if (colorSample.a > 0.0) {
-                            // accomodate for variable sampling rates (base interval defined by mod_compositing.frag)
-                            colorSample.a = 1.0 - pow(1.0 - colorSample.a, StepSize*200.0f);
-                            colorAcum.rgb += (1.0 - colorAcum.a) * colorSample.rgb * colorSample.a;
-                            colorAcum.a += (1.0 - colorAcum.a) * colorSample.a;
-                        }
-                        voxelCoord += deltaDir;
-                        lengthAcum += deltaDirLen;
-                        if (lengthAcum >= len )
-                        {   
-                            colorAcum.rgb = colorAcum.rgb*colorAcum.a + (1 - colorAcum.a)*bgColor.rgb;      
-                            break;  // terminate if opacity > 1 or the ray is outside the volume    
-                        }   
-                        else if (colorAcum.a > 1.0)
-                        {
-                            colorAcum.a = 1.0;
-                            break;
-                        }
-                    }
-                    FragColor = colorAcum;
-                    // for test
-                    // FragColor = vec4(EntryPoint, 1.0);
-                    // FragColor = vec4(exitPoint, 1.0);
-                   
-                }
-           '''),
-        ])
-
-        vbo_vertex = self.ctx.buffer(struct.pack(
+        # These are the vertices that make up our cube bounding volume. Every row specifies
+        # one corner of our unit cube
+        self.vbo_vertex = self.ctx.buffer(struct.pack(
             '24f',
             0.0, 0.0, 0.0,
             0.0, 0.0, 1.0,
@@ -262,7 +137,9 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
             1.0, 1.0, 1.0
         ))
 
-        vbo_veridx = self.ctx.buffer(struct.pack(
+        # This is the index buffer for our bounding geometry. Every row specifies a triangle
+        # by three indices of our vbo_index vertex buffer
+        self.vbo_veridx = self.ctx.buffer(struct.pack(
             '36I',
             1,5,7,
             7,3,1,
@@ -278,19 +155,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
             4,5,1
         ))
 
-        # create vertex array objects (@Todo: ModernGL associates vao with a program -> not possible to use vao with multiple programs)
-        vbo_attributes = ['VerPos',]
-        vbo_format = ModernGL.detect_format(self.prog_eep, vbo_attributes)
-        self.vao_eep = self.ctx.vertex_array(self.prog_eep, [(vbo_vertex, vbo_format, vbo_attributes)], vbo_veridx)
-
-        vbo_format = ModernGL.detect_format(self.prog_rc, vbo_attributes)
-        self.vao_rc = self.ctx.vertex_array(self.prog_rc, [(vbo_vertex, vbo_format, vbo_attributes)], vbo_veridx)
-
-        self.unf_screensize = self.prog_rc.uniforms["ScreenSize"]
-        self.unf_stepsize = self.prog_rc.uniforms["StepSize"]
-        self.unf_transferfunc = self.prog_rc.uniforms["TransferFunc"]
-        self.unf_exitpoints = self.prog_rc.uniforms["ExitPoints"]
-        self.unf_volumetex = self.prog_rc.uniforms["VolumeTex"]
+        self.reload_shaders()
 
     def setup_camera(self, prog, near=0.1, far=1000., fovy=45., pos=(3,3,3), center=(0,0,0)):
         ratio = self.width() / self.height()
@@ -311,6 +176,32 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         glCullFace(GL_BACK);
         self.vao_rc.render()
         glDisable(GL_CULL_FACE);
+
+    def reload_shaders(self):
+        print("Reloading shaders..")
+        self.prog_eep = self.ctx.program([
+            self.ctx.vertex_shader(open(os.path.join("glsl", "exitpoints.vert"), "r").read()),
+            self.ctx.fragment_shader(open(os.path.join("glsl", "exitpoints.frag"), "r").read()),
+        ])
+
+        self.prog_rc = self.ctx.program([
+            self.ctx.vertex_shader(open(os.path.join("glsl", "raycasting.vert"), "r").read()),
+            self.ctx.fragment_shader(open(os.path.join("glsl", "raycasting.frag"), "r").read()),
+        ])
+        
+        # create vertex array objects (@Todo: ModernGL associates vao with a program -> not possible to use vao with multiple programs)
+        vbo_attributes = ['VerPos',]
+        vbo_format = ModernGL.detect_format(self.prog_eep, vbo_attributes)
+        self.vao_eep = self.ctx.vertex_array(self.prog_eep, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
+
+        vbo_format = ModernGL.detect_format(self.prog_rc, vbo_attributes)
+        self.vao_rc = self.ctx.vertex_array(self.prog_rc, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
+
+        self.unf_screensize = self.prog_rc.uniforms["ScreenSize"]
+        self.unf_stepsize = self.prog_rc.uniforms["StepSize"]
+        self.unf_transferfunc = self.prog_rc.uniforms["TransferFunc"]
+        self.unf_exitpoints = self.prog_rc.uniforms["ExitPoints"]
+        self.unf_volumetex = self.prog_rc.uniforms["VolumeTex"]
 
     def paintGL(self):
         w, h = self.width()*self.devicePixelRatio(), self.height()*self.devicePixelRatio()
@@ -346,14 +237,13 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         # Raycast Volume
         self.ctx.clear(0.9, 0.9, 0.9)
         self.unf_screensize.value = (w,h)
-        self.unf_stepsize.value = 0.001
+        self.unf_stepsize.value = self.SamplingRate / max(self.volume_size)
         self.unf_volumetex.value = 0
         self.unf_transferfunc.value = 1
         self.unf_exitpoints.value = 2
         self.setup_camera(self.prog_rc, pos=pos)
 
         self.draw_box_rc()
-
 
         self.ctx.finish()
         self.update()
@@ -362,7 +252,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
     def resizeGL(self, width, height):
         self.color_texture = None
         self.depth_texture = None
-
 
 
     # @Todo: XXX This method is not used at the moment .. need to check first if it's correct.
@@ -475,17 +364,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         
     def mouseReleaseEvent(self, ev):
         pass
-        # Example item selection code:
-        #region = (ev.pos().x()-5, ev.pos().y()-5, 10, 10)
-        #print(self.itemsAt(region))
-        
-        ## debugging code: draw the picking region
-        #glViewport(*self.getViewport())
-        #glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT )
-        #region = (region[0], self.height()-(region[1]+region[3]), region[2], region[3])
-        #self.paintGL(region=region)
-        #self.swapBuffers()
-        
         
     def wheelEvent(self, ev):
         delta = 0
@@ -501,6 +379,8 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
     def keyPressEvent(self, ev):
         if ev.key() == QtCore.Qt.Key_Escape:
             QtCore.QCoreApplication.quit()
+        elif ev.key() == QtCore.Qt.Key_F5:
+            self.reload_shaders()
         if ev.key() in self.noRepeatKeys:
             ev.accept()
             if ev.isAutoRepeat():
@@ -531,16 +411,10 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
                     self.orbit(azim=0, elev=-speed)
                 elif key == QtCore.Qt.Key_Down:
                     self.orbit(azim=0, elev=speed)
-                elif key == QtCore.Qt.Key_PageUp:
-                    pass
-                elif key == QtCore.Qt.Key_PageDown:
-                    pass
+
                 self.keyTimer.start(16)
         else:
             self.keyTimer.stop()
-
-
-
 
 def main():
 
