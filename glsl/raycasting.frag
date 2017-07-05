@@ -1,77 +1,74 @@
 #version 410
 
-in vec3 EntryPoint;
-in vec4 ExitPointCoord;
+// These variables come from the previous vertex stage
+in vec3 EntryPoint;                 // Entry point as a 3d texture coordinate
+in vec4 ExitPointCoord;             // Entry point in world space
 
-uniform sampler2D ExitPoints;
-uniform sampler3D VolumeTex;
-uniform sampler2D TransferFunc;  
-uniform float     StepSize;
-uniform vec2      ScreenSize;
+// Uniforms are variables that are passed in and modified from the host
+uniform sampler2D ExitPoints;       // Exit points 
+uniform sampler3D VolumeTex;        // The volumetric texture to be rendered
+uniform sampler2D TransferFunc;     // The transfer function, discretized into a 2d texture
+uniform float     StepSize;         // Step size of the samples, in relation to the texture coordinates
+uniform vec2      ScreenSize;       // 
+uniform vec4      BackgroundColor = vec4(1.0); // The background color
+
+// The output color that is rendered onto the screen
 layout (location = 0) out vec4 FragColor;
 
 void main()
 {
-    // ExitPointCoord 
+    // Sample the exit point from the texture of the previous pass 
     vec3 exitPoint = texture(ExitPoints, gl_FragCoord.st/ScreenSize).xyz;
-    // that will actually give you clip-space coordinates rather than
-    // normalised device coordinates, since you're not performing the perspective
-    // division which happens during the rasterisation process (between the vertex
-    // shader and fragment shader
-    // vec2 exitFragCoord = (ExitPointCoord.xy / ExitPointCoord.w + 1.0)/2.0;
-    // vec3 exitPoint  = texture(ExitPoints, exitFragCoord).xyz;
-    if (EntryPoint == exitPoint)
-        //background need no raycasting
+
+    //background needs no raycasting
+    if (EntryPoint == exitPoint) 
         discard;
-    vec3 dir = exitPoint - EntryPoint;
-    float len = length(dir); // the length from front to back is calculated and used to terminate the ray
-    vec3 deltaDir = normalize(dir) * StepSize;
-    float deltaDirLen = length(deltaDir);
-    vec3 voxelCoord = EntryPoint;
-    vec4 colorAcum = vec4(0.0); // The dest color
-    float alphaAcum = 0.0;                // The  dest alpha for blending
-    /*  */
-    float intensity;
-    float lengthAcum = 0.0;
-    vec4 colorSample; // The src color 
-    float alphaSample; // The src alpha
-    // backgroundColor
-    vec4 bgColor = vec4(1.0, 1.0, 1.0, 1.0);
+
+    // ray setup
+    vec3 dir = exitPoint - EntryPoint;    // compute the direction vector
+    float len = length(dir);              // the length from front to back is calculated and used to terminate the ray
+    float effectiveStepSize = StepSize*0.5; // the effective step size
+    vec3 deltaDir = normalize(dir) * effectiveStepSize; // distance and direction between samples
+    vec3 voxelCoord = EntryPoint;         // current sample position. We start at the entry point and advance throughoug the raycasting loop
+    vec4 colorAccum = vec4(0.0);          // The accumulated color of the ray
     
-    int numSteps = int(ceil(len / deltaDirLen));
+    // the number of samples that will be taken along the ray
+    int numSteps = int(ceil(len / effectiveStepSize));
+
+    // This loops over all samples along the ray and integrates the color
     for(int i = 0; i < numSteps; i++)
     {
-        // scaler value
-        intensity =  texture(VolumeTex, voxelCoord).x;
-        // 
-        colorSample = texture(TransferFunc, vec2(intensity, 0.));
-        // modulate the value of colorSample.a
-        // front-to-back integration
+        // sample scalar intensity value from the volume
+        float intensity = texture(VolumeTex, voxelCoord).x;
+
+        // evaluate transfer function by sampling the texture
+        vec4 colorSample = texture(TransferFunc, vec2(intensity, 0.));
+        
+        // We only perform blending if the sample is not fully transparent
         if (colorSample.a > 0.0) {
-            // accomodate for variable sampling rates (base interval defined by mod_compositing.frag)
-            colorSample.a = 1.0 - pow(1.0 - colorSample.a, StepSize*200.0f);
-            colorAcum.rgb += (1.0 - colorAcum.a) * colorSample.rgb * colorSample.a;
-            colorAcum.a += (1.0 - colorAcum.a) * colorSample.a;
+            // accomodate for variable sampling rates
+            colorSample.a = 1.0 - pow(1.0 - colorSample.a, effectiveStepSize*200.0f);
+            // front-to-back blending of the samples
+            colorAccum.rgb += (1.0 - colorAccum.a) * colorSample.rgb * colorSample.a;
+            colorAccum.a += (1.0 - colorAccum.a) * colorSample.a;
         }
+
+        // advance the ray sample position
         voxelCoord += deltaDir;
-        lengthAcum += deltaDirLen;
-        if (lengthAcum >= len )
-        {   
-            colorAcum.rgb = colorAcum.rgb*colorAcum.a + (1 - colorAcum.a)*bgColor.rgb;      
-            break;  // terminate if opacity > 1 or the ray is outside the volume    
-        }   
-        else if (colorAcum.a > 1.0)
-        {
-            colorAcum.a = 1.0;
+        
+        // if the opacity is (almost) saturated, we can stop raycasting
+        if (colorAccum.a > .97) {
+            colorAccum.a = 1.0;
             break;
         }
     }
-    FragColor = colorAcum;
+    // blend the background color using an "under" blend operation
+    FragColor = mix(BackgroundColor, colorAccum, colorAccum.a); 
     
     // Visualize the number of raycasting steps
     //FragColor = vec4(clamp(float(numSteps)/1500, 0, 1));
 
-    // for test
+    // for testing
     //FragColor = vec4(EntryPoint, 1.0);
     //FragColor = vec4(exitPoint, 1.0);
     

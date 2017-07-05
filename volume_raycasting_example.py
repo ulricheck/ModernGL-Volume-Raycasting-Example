@@ -1,7 +1,7 @@
 # Demo for Volume Raycasting using ModernGL
 # Author: Ulrich Eck https://github.com/ulricheck
 # Code for OpenGL Camera Control borrowed from: https://github.com/pyqtgraph/pyqtgraph/blob/develop/pyqtgraph/opengl/GLViewWidget.py
-# Code for Volume Raycasting borrowed from: https://github.com/toolchainX/Volume_Rendering_Using_GLSL
+# Code for Volume Raycasting adapted from: https://github.com/toolchainX/Volume_Rendering_Using_GLSL
 
 import os
 import struct
@@ -20,8 +20,6 @@ try:
 except ImportError as e:
     print(""" !!! Please make sure you have successfully installed ModernGL (pip install ModernGL) and PyQt5 !!!""")
     raise e
-
-
 
 def load_transferfunction(filename):
     with open(filename,'rb') as fid:
@@ -64,9 +62,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
 
         self.setFocusPolicy(QtCore.Qt.ClickFocus)
 
-        self.timer = QtCore.QElapsedTimer()
-        self.timer.restart()
-
         self.volume_data = volume_data
         self.volume_size = volsize
         self.tff_data = transferfunction
@@ -95,10 +90,8 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.keyTimer = QtCore.QTimer()
         self.keyTimer.timeout.connect(self.evalKeyState)
 
-
-
-
     def initializeGL(self):
+        """ Initializes the OpenGL Context and pipeline, and creates + uploads textures for the volume and transfer function """
         self.ctx = ModernGL.create_context()
         self.resizeGL(self.width(), self.height())
 
@@ -159,7 +152,34 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
 
         self.reload_shaders()
 
-    def setup_camera(self, prog, near=0.1, far=1000., fovy=45., pos=(3,3,3), center=(0,0,0)):
+    def reload_shaders(self):
+        print("Reloading shaders..")
+        self.prog_eep = self.ctx.program([
+            self.ctx.vertex_shader(load_shader("exitpoints.vert")),
+            self.ctx.fragment_shader(load_shader("exitpoints.frag")),
+        ])
+
+        self.prog_rc = self.ctx.program([
+            self.ctx.vertex_shader(load_shader("raycasting.vert")),
+            self.ctx.fragment_shader(load_shader("raycasting.frag")),
+        ])
+        
+        # re-attach vertex array objects
+        vbo_attributes = ['VerPos',]
+        vbo_format = ModernGL.detect_format(self.prog_eep, vbo_attributes)
+        self.vao_eep = self.ctx.vertex_array(self.prog_eep, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
+
+        vbo_format = ModernGL.detect_format(self.prog_rc, vbo_attributes)
+        self.vao_rc = self.ctx.vertex_array(self.prog_rc, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
+
+        # update handles for the uniforms
+        self.unf_screensize = self.prog_rc.uniforms["ScreenSize"]
+        self.unf_stepsize = self.prog_rc.uniforms["StepSize"]
+        self.unf_transferfunc = self.prog_rc.uniforms["TransferFunc"]
+        self.unf_exitpoints = self.prog_rc.uniforms["ExitPoints"]
+        self.unf_volumetex = self.prog_rc.uniforms["VolumeTex"]
+
+    def setup_camera(self, prog, near=0.1, far=1000., fovy=45.):
         ratio = self.width() / self.height()
         mvp = Matrix44.perspective_projection(fovy, ratio, near, far)
         mvp *= self.viewMatrix()
@@ -179,32 +199,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.vao_rc.render()
         glDisable(GL_CULL_FACE);
 
-    def reload_shaders(self):
-        print("Reloading shaders..")
-        self.prog_eep = self.ctx.program([
-            self.ctx.vertex_shader(load_shader("exitpoints.vert")),
-            self.ctx.fragment_shader(load_shader("exitpoints.frag")),
-        ])
-
-        self.prog_rc = self.ctx.program([
-            self.ctx.vertex_shader(load_shader("raycasting.vert")),
-            self.ctx.fragment_shader(load_shader("raycasting.frag")),
-        ])
-        
-        # create vertex array objects (@Todo: ModernGL associates vao with a program -> not possible to use vao with multiple programs)
-        vbo_attributes = ['VerPos',]
-        vbo_format = ModernGL.detect_format(self.prog_eep, vbo_attributes)
-        self.vao_eep = self.ctx.vertex_array(self.prog_eep, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
-
-        vbo_format = ModernGL.detect_format(self.prog_rc, vbo_attributes)
-        self.vao_rc = self.ctx.vertex_array(self.prog_rc, [(self.vbo_vertex, vbo_format, vbo_attributes)], self.vbo_veridx)
-
-        self.unf_screensize = self.prog_rc.uniforms["ScreenSize"]
-        self.unf_stepsize = self.prog_rc.uniforms["StepSize"]
-        self.unf_transferfunc = self.prog_rc.uniforms["TransferFunc"]
-        self.unf_exitpoints = self.prog_rc.uniforms["ExitPoints"]
-        self.unf_volumetex = self.prog_rc.uniforms["VolumeTex"]
-
     def paintGL(self):
         render_start = time.perf_counter()
 
@@ -214,20 +208,17 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
 
         self.ctx.clear(0.9, 0.9, 0.9)
 
-        elapsed_time = self.timer.elapsed() / 1000
-        dist = 3.
-        pos = (np.cos(elapsed_time)*dist, np.sin(elapsed_time)*dist, dist)
-
         # render Entry/Exit-Point Texture into FBO
         if self.color_texture is None or self.depth_texture is None:
             # needs to be reset on window resize
             self.color_texture = self.ctx.texture((w,h), 4, None)
             self.depth_texture = self.ctx.depth_texture((w,h), None)
             self.fbo = self.ctx.framebuffer(self.color_texture, self.depth_texture)
-
+        
+        # set up and draw to the offscreen buffer for the exit points
         self.fbo.clear()
         self.fbo.use()
-        self.setup_camera(self.prog_eep, pos=pos)
+        self.setup_camera(self.prog_eep)
         self.draw_box_eep()
 
         if hasattr(ModernGL, "default_framebuffer"):
@@ -236,22 +227,25 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
             # stop using the fbo (@Todo: ModernGL needs a way to handle this)
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+        # set up to bind the color texture to the third texture location
         self.color_texture.use(2)
 
-        # Raycast Volume
+        # clear the buffer and set up the uniforms
         self.ctx.clear(0.9, 0.9, 0.9)
-        self.unf_screensize.value = (w,h)
-        self.unf_stepsize.value = self.sampling_rate / max(self.volume_size)
-        self.unf_volumetex.value = 0
-        self.unf_transferfunc.value = 1
-        self.unf_exitpoints.value = 2
-        self.setup_camera(self.prog_rc, pos=pos)
+        self.unf_screensize.value = (w,h) 
+        self.unf_stepsize.value = self.sampling_rate / max(self.volume_size) # step size is relative to the number of voxels
+        self.unf_volumetex.value = 0    # the volume texture is bound to the first location
+        self.unf_transferfunc.value = 1 # the transfer function texture is bound to the second location
+        self.unf_exitpoints.value = 2   # the exit points texture is bound to the third location
+        self.setup_camera(self.prog_rc)
 
+        # do a front face pass to perform the actual raycasting
         self.draw_box_rc()
 
         self.ctx.finish()
         self.update()
 
+        # FPS Counter
         dt = time.perf_counter() - render_start
         if hasattr(self, "last_frame_counter"):
             self.last_frame_counter += 1
@@ -269,30 +263,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.color_texture = None
         self.depth_texture = None
 
-
-    # @Todo: XXX This method is not used at the moment .. need to check first if it's correct.
-    def projectionMatrix(self):
-        x0, y0, w, h = (0, 0, self.width()*self.devicePixelRatio(), self.height()*self.devicePixelRatio())
-        dist = self.camera_distance
-        fov = self.camera_fov
-        nearClip = dist * 0.001
-        farClip = dist * 1000.
-
-        r = nearClip * np.tan(fov * 0.5 * np.pi / 180.)
-        t = r * h / w
-
-        # convert screen coordinates (region) to normalized device coordinates
-        # Xnd = (Xw - X0) * 2/width - 1
-        ## Note that X0 and width in these equations must be the values used in viewport
-        left  = r * ((region[0]-x0) * (2.0/w) - 1)
-        right = r * ((region[0]+region[2]-x0) * (2.0/w) - 1)
-        bottom = t * ((region[1]-y0) * (2.0/h) - 1)
-        top    = t * ((region[1]+region[3]-y0) * (2.0/h) - 1)
-
-        tr = QtGui.QMatrix4x4()
-        tr.frustum(left, right, bottom, top, nearClip, farClip)
-        return np.array(tr.copyDataTo()).reshape((4,4)).transpose()
-        
 
     def viewMatrix(self):
         tr = QtGui.QMatrix4x4()
@@ -360,8 +330,6 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
             self.camera_center = self.camera_center + xVec * xScale * dx + yVec * xScale * dy + zVec * xScale * dz
         self.update()
 
-
-
     def mousePressEvent(self, ev):
         self.mousePos = ev.pos()
         
@@ -370,8 +338,7 @@ class QGLControllerWidget(QtOpenGL.QGLWidget):
         self.mousePos = ev.pos()
         
         if ev.buttons() == QtCore.Qt.LeftButton:
-            self.orbit(-diff.x(), diff.y())
-            #print self.opts['azimuth'], self.opts['elevation']
+            self.orbit(-diff.x(), -diff.y())
         elif ev.buttons() == QtCore.Qt.MidButton:
             if (ev.modifiers() & QtCore.Qt.ControlModifier):
                 self.pan(diff.x(), 0, diff.y(), relative=True)
