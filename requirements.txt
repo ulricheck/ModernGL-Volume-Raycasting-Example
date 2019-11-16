@@ -1,4 +1,4 @@
-ModernGL>=4.1.9
+ModernGL==4.2.0
 pyrr>=0.8.4
 numpy
 PyOpenGL
